@@ -38,7 +38,6 @@ import android.telecom.TelecomManager;
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.logging.UiEvent;
 import com.android.internal.logging.UiEventLogger;
-import com.android.systemui.R;
 import com.android.systemui.dagger.SysUISingleton;
 import com.android.systemui.dagger.qualifiers.Main;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
@@ -84,9 +83,8 @@ public class NotificationInterruptStateProviderImpl implements NotificationInter
 
     private boolean mLessBoringHeadsUp = false;
     private boolean mReTicker = false;
+    private TelecomManager mTm;
     private Context mContext;
-
-    private List<String> mHeadsUpAllowList;
 
     public enum NotificationInterruptEvent implements UiEventLogger.UiEventEnum {
         @UiEvent(doc = "FSI suppressed for suppressive GroupAlertBehavior")
@@ -133,6 +131,7 @@ public class NotificationInterruptStateProviderImpl implements NotificationInter
             UiEventLogger uiEventLogger,
             UserTracker userTracker) {
         mContext = context;
+        mTm = (TelecomManager) context.getSystemService(Context.TELECOM_SERVICE);
         mContentResolver = contentResolver;
         mPowerManager = powerManager;
         mBatteryController = batteryController;
@@ -173,18 +172,6 @@ public class NotificationInterruptStateProviderImpl implements NotificationInter
         };
 
         if (ENABLE_HEADS_UP) {
-            String defaultSmsPackage = getDefaultSmsPackage(context);
-            String defaultDialerPackage = getDefaultDialerPackage(context);
-
-            mHeadsUpAllowList = Arrays.asList(
-                    mContext.getResources().getStringArray(R.array.config_boringHeadsUpPackageAllowList));
-
-            if (!defaultSmsPackage.isEmpty() && !mHeadsUpAllowList.contains(defaultSmsPackage))
-                mHeadsUpAllowList.add(defaultSmsPackage);
-
-            if (!defaultDialerPackage.isEmpty() && !mHeadsUpAllowList.contains(defaultDialerPackage))
-                mHeadsUpAllowList.add(defaultDialerPackage);
-
             mContentResolver.registerContentObserver(
                     Settings.Global.getUriFor(Settings.Global.HEADS_UP_NOTIFICATIONS_ENABLED),
                     true,
@@ -200,9 +187,8 @@ public class NotificationInterruptStateProviderImpl implements NotificationInter
                     Settings.System.getUriFor(Settings.System.RETICKER_STATUS),
                     true,
                     headsUpObserver);
-
-            headsUpObserver.onChange(true); // set up
         }
+        headsUpObserver.onChange(true); // set up
     }
 
     @Override
@@ -585,7 +571,21 @@ public class NotificationInterruptStateProviderImpl implements NotificationInter
             return false;
         }
 
-        return !mHeadsUpAllowList.contains(entry.getSbn().getPackageName().toLowerCase());
+        String notificationPackageName = entry.getSbn().getPackageName();
+
+        // List of packages allowed to show headsup notification
+        List<String> headsUpWhitelistPackages = Arrays.asList(
+            getDefaultDialerPackage(mTm).toLowerCase(),
+            getDefaultSmsPackage(mContext).toLowerCase(),
+            "dialer",
+            "messaging",
+            "messenger",
+            "clock"
+        );
+
+        boolean shouldSkip = !headsUpWhitelistPackages.contains(notificationPackageName.toLowerCase());
+
+        return shouldSkip;
     }
 
     private static String getDefaultSmsPackage(Context ctx) {
@@ -593,8 +593,7 @@ public class NotificationInterruptStateProviderImpl implements NotificationInter
         return Sms.getDefaultSmsPackage(ctx);
     }
 
-    private static String getDefaultDialerPackage(Context ctx) {
-        TelecomManager tm = (TelecomManager) ctx.getSystemService(Context.TELECOM_SERVICE);
+    private static String getDefaultDialerPackage(TelecomManager tm) {
         return tm != null ? tm.getDefaultDialerPackage() : "";
     }
 
